@@ -70,6 +70,27 @@ h1 {
 .arch a .ac { color:var(--ink-3); }
 .arch a.on .ac { color:var(--accent); }
 section { margin-top:40px; }
+.dash { margin-top:28px; }
+.dashchart-wrap { overflow-x:auto; margin:14px 0 18px; }
+svg.dashchart { width:100%; min-width:420px; height:120px; display:block; }
+svg.dashchart .b { shape-rendering:crispEdges; }
+svg.dashchart .b.watch { fill:var(--vol); }
+svg.dashchart .b.fire { fill:var(--accent); }
+svg.dashchart .b.watch.on { fill:var(--vol-hot); }
+svg.dashchart .b.fire.on { fill:var(--accent); }
+svg.dashchart .xl { font-family:"IBM Plex Mono",monospace; font-size:9px; fill:var(--ink-3); }
+.dtab { width:100%; border-collapse:collapse; font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:12px; font-variant-numeric:tabular-nums; }
+.dtab th { text-align:left; font-weight:500; text-transform:uppercase; letter-spacing:.06em;
+  font-size:10px; color:var(--ink-3); padding:6px 10px; border-bottom:1px solid var(--hair); }
+.dtab td { padding:6px 10px; border-bottom:1px solid var(--hair-2); color:var(--ink-2); }
+.dtab td a { color:var(--ink); text-decoration:none; }
+.dtab td a:hover { color:var(--accent); text-decoration:underline; }
+.dtab .num { text-align:right; }
+.dtab td.fire { color:var(--accent); font-weight:600; }
+.dtab td.watch { color:var(--vol-hot); }
+.dtab td.built { color:var(--ink-3); font-size:11px; }
+.dtab tr.on td { background:var(--accent-soft); }
 h2 {
   font-size:13px; text-transform:uppercase; letter-spacing:.09em; font-weight:600;
   color:var(--ink); margin:0 0 4px; display:flex; align-items:center; gap:10px;
@@ -136,12 +157,12 @@ footer code { font-family:"IBM Plex Mono",monospace; background:var(--panel-2); 
   <div class="meta">
     <span><b>scan data:</b> 2026-08-28</span>
     <span><b>hawkeye ran:</b> 2026-08-28 21:09 UTC</span>
-    <span><b>page built:</b> 2026-08-31 03:40 UTC</span>
+    <span><b>page built:</b> 2026-08-31 03:47 UTC</span>
     <span><b>universe:</b> 5785</span>
     <span><b>hits:</b> 0 + 4 watch</span>
   </div>
-  <nav class='arch'><span class='archlbl'>Daily archive</span><a href='./index.html'>latest &rarr;</a><a href='./2026-08-28.html' class='on'>2026-08-28<span class='ac'> 0+4</span></a></nav>
 </header>
+<nav class='arch'><span class='archlbl'>Daily archive</span><a href='./index.html'>&larr; dashboard</a><a href='./2026-08-28.html' class='on'>2026-08-28<span class='ac'> 0+4</span></a></nav>
 <section><h2>Both volume legs firing</h2><p class='empty'>Nothing cleared this bar for this scan.</p></section><section><h2>Watch — one leg soft <span class='count'>4</span></h2><p class='shdr'>The multi-week volume streak is there but today's pop is muted, or today popped while the streak is still 1 week.</p><article class="card">
   <div class="readout">
     <div class="idline">
