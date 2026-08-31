@@ -271,18 +271,75 @@ def card(r):
 
 
 def archive_nav(archive, current, is_index):
-    """archive: list of {date, pass, watch}, newest first. Renders the day switcher."""
-    links = []
-    if not is_index:
-        links.append("<a href='./index.html'>latest &rarr;</a>")
+    """Compact pill strip used on the individual day pages."""
+    links = ["<a href='./index.html'>&larr; dashboard</a>"]
     for e in archive:
         d = e["date"]
         label = f"{d}<span class='ac'> {e.get('pass','?')}+{e.get('watch','?')}</span>"
-        href = "./index.html" if (is_index and d == current) else f"./{d}.html"
         cls = " class='on'" if d == current else ""
-        links.append(f"<a href='{href}'{cls}>{label}</a>")
+        links.append(f"<a href='./{d}.html'{cls}>{label}</a>")
     return ("<nav class='arch'><span class='archlbl'>Daily archive</span>"
             + "".join(links) + "</nav>")
+
+
+ARCH_CHART_DAYS = 45   # how many recent scans to show as bars on the dashboard
+
+
+def archive_dashboard(archive, current):
+    """Full archive view for index.html: a stacked bar mini-chart + a table, one row per scan day."""
+    if not archive:
+        return ""
+    rows = archive[:200]
+    chart_days = list(reversed(rows[:ARCH_CHART_DAYS]))   # oldest -> newest, left -> right
+
+    # --- stacked bar mini-chart (firing on top of watch) ---
+    W, H = 900, 120
+    PADT, PADB = 8, 16
+    ih = H - PADT - PADB
+    mx = max((e.get("pass", 0) + e.get("watch", 0)) for e in chart_days) or 1
+    n = len(chart_days)
+    slot = W / max(n, 1)
+    bw = min(16, slot * 0.62)
+    bars = []
+    for i, e in enumerate(chart_days):
+        p, w = e.get("pass", 0), e.get("watch", 0)
+        x = slot * i + (slot - bw) / 2
+        wh = ih * (w / mx)
+        ph = ih * (p / mx)
+        yb = PADT + ih - wh
+        yt = yb - ph
+        on = " on" if e["date"] == current else ""
+        if w:
+            bars.append(f"<rect class='b watch{on}' x='{x:.1f}' y='{yb:.1f}' width='{bw:.1f}' height='{wh:.1f}'/>")
+        if p:
+            bars.append(f"<rect class='b fire{on}' x='{x:.1f}' y='{yt:.1f}' width='{bw:.1f}' height='{ph:.1f}' rx='2'/>")
+    labs = []
+    for i in (0, n // 2, n - 1):
+        if 0 <= i < n:
+            anc = "start" if i == 0 else ("end" if i == n - 1 else "middle")
+            labs.append(f"<text class='xl' x='{slot*i + slot/2:.1f}' y='{H-3}' text-anchor='{anc}'>{chart_days[i]['date'][5:]}</text>")
+    chart = (f"<svg viewBox='0 0 {W} {H}' class='dashchart' preserveAspectRatio='none' role='img' "
+             f"aria-label='daily hit counts, last {n} scans'><g>{''.join(bars)}</g>{''.join(labs)}</svg>")
+
+    # --- table ---
+    trs = []
+    for e in rows:
+        d = e["date"]
+        cur = " class='on'" if d == current else ""
+        trs.append(
+            f"<tr{cur}><td><a href='./{d}.html'>{d}</a></td>"
+            f"<td class='num fire'>{e.get('pass','–')}</td>"
+            f"<td class='num watch'>{e.get('watch','–')}</td>"
+            f"<td class='built'>{html.escape(str(e.get('built','')))}</td></tr>"
+        )
+    table = ("<table class='dtab'><thead><tr><th>scan date</th><th class='num'>firing</th>"
+             "<th class='num'>watch</th><th>built</th></tr></thead><tbody>"
+             + "".join(trs) + "</tbody></table>")
+
+    return (f"<section class='dash'><h2>Daily archive <span class='count'>{len(rows)}</span></h2>"
+            f"<p class='shdr'>Every scan since this started. Bars are watch (grey) + firing (gold); "
+            f"click a date for that day's full screen.</p>"
+            f"<div class='dashchart-wrap'>{chart}</div>{table}</section>")
 
 
 def render(rows, meta, archive, scan_date, is_index):
@@ -328,7 +385,8 @@ def render(rows, meta, archive, scan_date, is_index):
     return TEMPLATE.format(
         title=title,
         kind=kind,
-        arch=archive_nav(archive, scan_date, is_index),
+        arch=(archive_dashboard(archive, scan_date) if is_index
+              else archive_nav(archive, scan_date, is_index)),
         data_date=html.escape(str(dd)),
         scan_updated=html.escape(updated or "–"),
         generated=html.escape(gen),
@@ -411,6 +469,27 @@ h1 {{
 .arch a .ac {{ color:var(--ink-3); }}
 .arch a.on .ac {{ color:var(--accent); }}
 section {{ margin-top:40px; }}
+.dash {{ margin-top:28px; }}
+.dashchart-wrap {{ overflow-x:auto; margin:14px 0 18px; }}
+svg.dashchart {{ width:100%; min-width:420px; height:120px; display:block; }}
+svg.dashchart .b {{ shape-rendering:crispEdges; }}
+svg.dashchart .b.watch {{ fill:var(--vol); }}
+svg.dashchart .b.fire {{ fill:var(--accent); }}
+svg.dashchart .b.watch.on {{ fill:var(--vol-hot); }}
+svg.dashchart .b.fire.on {{ fill:var(--accent); }}
+svg.dashchart .xl {{ font-family:"IBM Plex Mono",monospace; font-size:9px; fill:var(--ink-3); }}
+.dtab {{ width:100%; border-collapse:collapse; font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:12px; font-variant-numeric:tabular-nums; }}
+.dtab th {{ text-align:left; font-weight:500; text-transform:uppercase; letter-spacing:.06em;
+  font-size:10px; color:var(--ink-3); padding:6px 10px; border-bottom:1px solid var(--hair); }}
+.dtab td {{ padding:6px 10px; border-bottom:1px solid var(--hair-2); color:var(--ink-2); }}
+.dtab td a {{ color:var(--ink); text-decoration:none; }}
+.dtab td a:hover {{ color:var(--accent); text-decoration:underline; }}
+.dtab .num {{ text-align:right; }}
+.dtab td.fire {{ color:var(--accent); font-weight:600; }}
+.dtab td.watch {{ color:var(--vol-hot); }}
+.dtab td.built {{ color:var(--ink-3); font-size:11px; }}
+.dtab tr.on td {{ background:var(--accent-soft); }}
 h2 {{
   font-size:13px; text-transform:uppercase; letter-spacing:.09em; font-weight:600;
   color:var(--ink); margin:0 0 4px; display:flex; align-items:center; gap:10px;
@@ -481,8 +560,8 @@ footer code {{ font-family:"IBM Plex Mono",monospace; background:var(--panel-2);
     <span><b>universe:</b> {universe}</span>
     <span><b>hits:</b> {n_pass} + {n_watch} watch</span>
   </div>
-  {arch}
 </header>
+{arch}
 {body}
 {noise}
 <footer>
