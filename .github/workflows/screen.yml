@@ -1,0 +1,62 @@
+name: Build volume-pivot screen
+
+on:
+  schedule:
+    # 17:00 UTC, Mon-Fri = 12:00 noon US Central while Daylight Time is in effect (mid-Mar to early Nov).
+    # After the Nov DST change this fires at 11:00 Central; change to "0 18 * * 1-5" then if you want noon year-round.
+    # GitHub may start scheduled runs several minutes to ~30 min late under load.
+    - cron: "0 17 * * 1-5"
+  workflow_dispatch:        # adds a "Run workflow" button in the Actions tab for on-demand rebuilds
+  push:
+    branches: [main]
+    paths-ignore:           # don't loop on the bot's own archive commits
+      - 'public/**'
+
+permissions:
+  contents: write          # commit the day's page + manifest back to the repo (this is the archive)
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false   # let an in-flight run finish so its archive commit isn't lost
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4      # restores public/ so previous days survive into the new deploy
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate pages
+        run: |
+          python build_screen.py public
+          echo "----- public/ -----"
+          ls -la public
+          # Fail the run (leaving the live page untouched) if the latest page came back essentially empty
+          test "$(wc -c < public/index.html)" -ge 2000
+
+      - name: Commit the day's page to the archive
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public
+          if git diff --cached --quiet; then
+            echo "no page changes to commit"
+          else
+            git commit -m "screen $(date -u +%F)"
+            git push
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
