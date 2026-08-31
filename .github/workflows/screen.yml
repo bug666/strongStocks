@@ -2,10 +2,11 @@ name: Build volume-pivot screen
 
 on:
   schedule:
-    # 17:00 UTC, Mon-Fri = 12:00 noon US Central while Daylight Time is in effect (mid-Mar to early Nov).
-    # After the Nov DST change this fires at 11:00 Central; change to "0 18 * * 1-5" then if you want noon year-round.
-    # GitHub may start scheduled runs several minutes to ~30 min late under load.
-    - cron: "0 17 * * 1-5"
+    # 19:00 UTC, Mon-Fri = 2:00 PM US Central while Daylight Time is in effect (mid-Mar to early Nov).
+    # After the Nov DST change this fires at 1:00 PM Central; change to "0 20 * * 1-5" then to keep it at 2 PM year-round.
+    # GitHub may start scheduled runs several minutes to ~30 min late under load, and a newly-added
+    # cron is often skipped for its first slot or two until GitHub's scheduler registers it.
+    - cron: "0 19 * * 1-5"
   workflow_dispatch:        # adds a "Run workflow" button in the Actions tab for on-demand rebuilds
   push:
     branches: [main]
