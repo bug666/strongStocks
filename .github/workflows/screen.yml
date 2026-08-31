@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false   # let an in-flight run finish so its archive commit isn't lost
+  cancel-in-progress: true    # a newer run supersedes an in-flight one; avoids two runs racing to push
 
 jobs:
   build:
@@ -34,25 +34,28 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Generate pages
+      - name: Build pages and commit the archive
         run: |
-          python build_screen.py public
-          echo "----- public/ -----"
-          ls -la public
-          # Fail the run (leaving the live page untouched) if the latest page came back essentially empty
-          test "$(wc -c < public/index.html)" -ge 2000
-
-      - name: Commit the day's page to the archive
-        run: |
+          set -e
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public
-          if git diff --cached --quiet; then
-            echo "no page changes to commit"
-          else
-            git commit -m "screen $(date -u +%F)"
-            git push
-          fi
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            git fetch -q origin "${GITHUB_REF_NAME}"
+            git reset -q --hard "origin/${GITHUB_REF_NAME}"     # rebuild on top of the latest remote
+            python build_screen.py public
+            echo "----- public/ (attempt $attempt) -----"; ls -la public
+            test "$(wc -c < public/index.html)" -ge 2000       # fail the run if the latest page is empty
+            git add public
+            if git diff --cached --quiet; then
+              echo "no page changes"; ok=1; break
+            fi
+            git commit -q -m "screen $(date -u +%F)"
+            if git push -q; then ok=1; break; fi
+            echo "push rejected (attempt $attempt) - remote moved, retrying"
+            sleep $(( (RANDOM % 6) + 3 ))
+          done
+          [ "$ok" = 1 ] || { echo "could not push the archive after retries" >&2; exit 1; }
 
       - uses: actions/upload-pages-artifact@v3
         with:
