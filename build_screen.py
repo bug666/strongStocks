@@ -76,30 +76,39 @@ def vol_stats(v):
     }
 
 
-def to_weekly(d, c, v, weeks=52):
-    """Aggregate daily bars into fixed 5-session weekly buckets.
+def to_weekly(o, weeks=52):
+    """Aggregate daily OHLC bars into fixed 5-session weekly buckets, counted
+    back from the most recent bar (same week definition as vol_stats).
 
-    Blocks are counted back from the most recent bar (same week definition as
-    vol_stats). Week label = the block's last session date, weekly close = its
-    last close, weekly volume = the block sum. Returns the last `weeks` buckets
-    oldest -> newest.
+    open = first open, high = max high, low = min low, close = last close,
+    volume = block sum, date = block's last session. Returns the last `weeks`
+    buckets oldest -> newest.
     """
-    d = d or []
-    c = c or []
-    v = v or []
-    n = min(len(d), len(c), len(v))
+    d  = o.get("d") or []
+    op = o.get("o") or []
+    hi = o.get("h") or []
+    lo = o.get("l") or []
+    cl = o.get("c") or []
+    vo = o.get("v") or []
+    n = min(len(d), len(op), len(hi), len(lo), len(cl), len(vo))
     if n < 10:
-        return {"d": [], "c": [], "v": []}
-    d, c, v = d[-n:], c[-n:], v[-n:]
-    wd, wc, wv = [], [], []
+        return {"d": [], "o": [], "h": [], "l": [], "c": [], "v": []}
+    d, op, hi, lo, cl, vo = (a[-n:] for a in (d, op, hi, lo, cl, vo))
+    wd, wo, wh, wl, wc, wv = [], [], [], [], [], []
     i = n
     while i > 0 and len(wd) < weeks:
-        lo = max(0, i - 5)
+        s = max(0, i - 5)
+        blk_h = [x for x in hi[s:i] if isinstance(x, (int, float))]
+        blk_l = [x for x in lo[s:i] if isinstance(x, (int, float))]
         wd.append(d[i - 1])
-        wc.append(c[i - 1])
-        wv.append(sum(x for x in v[lo:i] if isinstance(x, (int, float))))
-        i = lo
-    return {"d": wd[::-1], "c": wc[::-1], "v": wv[::-1]}
+        wo.append(op[s])
+        wc.append(cl[i - 1])
+        wh.append(max(blk_h) if blk_h else None)
+        wl.append(min(blk_l) if blk_l else None)
+        wv.append(sum(x for x in vo[s:i] if isinstance(x, (int, float))))
+        i = s
+    return {"d": wd[::-1], "o": wo[::-1], "h": wh[::-1],
+            "l": wl[::-1], "c": wc[::-1], "v": wv[::-1]}
 
 
 def collect(raw_cache=None):
@@ -147,9 +156,12 @@ def collect(raw_cache=None):
                     "patterns": set(),
                     "chart": {
                         "d": (o.get("d") or [])[n - k:],
+                        "o": (o.get("o") or [])[n - k:],
+                        "h": (o.get("h") or [])[n - k:],
+                        "l": (o.get("l") or [])[n - k:],
                         "c": (o.get("c") or [])[n - k:],
                         "v": (o.get("v") or [])[n - k:],
-                        "w": to_weekly(o.get("d"), o.get("c"), o.get("v")),
+                        "w": to_weekly(o),
                     },
                 }
                 by_ticker[t] = rec
@@ -181,53 +193,69 @@ def fnum(x, d=2):
     return f"{x:,.{d}f}"
 
 
-def spark_svg(d, c, v, pivot, hot_thresh, tf):
-    """One price-line + volume-bar chart. tf is 'daily' or 'weekly' (only sets
-    the aria-label unit); hot_thresh is the absolute volume level at or above
-    which a bar is drawn 'hot'."""
-    d = list(d or [])
-    c = [x for x in (c or []) if isinstance(x, (int, float))]
-    v = [x for x in (v or []) if isinstance(x, (int, float))]
-    n = min(len(d), len(c), len(v))
-    if n < 10:
+def spark_svg(bars, pivot, hot_thresh, tf):
+    """One OHLC price-bar + volume-bar chart. Price bars are green when the
+    close is at or above the open, red otherwise (a vertical high-low bar with
+    a left open tick and a right close tick). tf ('daily'|'weekly') only sets
+    the aria-label unit; hot_thresh is the absolute volume level at or above
+    which a volume bar is drawn 'hot'."""
+    bars = bars or {}
+    D = list(bars.get("d") or [])
+    O, Hg, Lw, C, V = (bars.get(k) or [] for k in ("o", "h", "l", "c", "v"))
+    m = min(len(D), len(O), len(Hg), len(Lw), len(C), len(V))
+    rows = []
+    for i in range(len(D) - m, len(D)):
+        row = (D[i], O[i], Hg[i], Lw[i], C[i], V[i])
+        if row[0] and all(isinstance(x, (int, float)) for x in row[1:]):
+            rows.append(row)
+    if len(rows) < 10:
         return "<div class='nochart'>no chart data</div>"
-    d, c, v = d[-n:], c[-n:], v[-n:]
+    d  = [r[0] for r in rows]
+    o  = [r[1] for r in rows]
+    h  = [r[2] for r in rows]
+    l  = [r[3] for r in rows]
+    c  = [r[4] for r in rows]
+    v  = [r[5] for r in rows]
+    n  = len(rows)
     unit = "weeks" if tf == "weekly" else "sessions"
     W, H = 620, 200
     PADL, PADR, PADT = 6, 44, 8
     VOL_H, GAP = 58, 14
     price_h = H - PADT - VOL_H - GAP
-    lo, hi = min(c), max(c)
-    if pivot and lo <= pivot <= hi * 1.15:
-        hi = max(hi, pivot)
-        lo = min(lo, pivot)
-    rng = (hi - lo) or 1
+    lo_p, hi_p = min(l), max(h)
+    if pivot and lo_p <= pivot <= hi_p * 1.15:
+        hi_p = max(hi_p, pivot)
+        lo_p = min(lo_p, pivot)
+    rng = (hi_p - lo_p) or 1
     iw = W - PADL - PADR
     xs = [PADL + iw * i / (n - 1) for i in range(n)]
-    py = [PADT + price_h * (1 - (val - lo) / rng) for val in c]
+    py = lambda val: PADT + price_h * (1 - (val - lo_p) / rng)
     # clip the volume scale to the ~92nd percentile so one blow-off day doesn't flatten the rest
     sv = sorted(v)
     vmax = sv[max(0, min(len(sv) - 1, int(len(sv) * 0.92)))] or (max(v) or 1)
     bw = max(1.5, iw / n * 0.62)
+    tick = max(1.0, bw * 0.45)
 
-    bars = []
+    vbars, pbars = [], []
     for i in range(n):
         bh = min(VOL_H, VOL_H * (v[i] / vmax))
-        y = PADT + price_h + GAP + (VOL_H - bh)
+        vy = PADT + price_h + GAP + (VOL_H - bh)
         hot = hot_thresh and v[i] >= hot_thresh
-        cls = "vb hot" if hot else "vb"
-        bars.append(f"<rect class='{cls}' x='{xs[i]-bw/2:.1f}' y='{y:.1f}' width='{bw:.1f}' height='{max(bh,0.6):.1f}' rx='1'/>")
-
-    line = "M" + " L".join(f"{xs[i]:.1f} {py[i]:.1f}" for i in range(n))
-    endx, endy = xs[-1], py[-1]
+        vbars.append(f"<rect class='{'vb hot' if hot else 'vb'}' x='{xs[i]-bw/2:.1f}' y='{vy:.1f}' width='{bw:.1f}' height='{max(bh,0.6):.1f}' rx='1'/>")
+        cls = "ob up" if c[i] >= o[i] else "ob dn"
+        pbars.append(
+            f"<path class='{cls}' d='M{xs[i]:.1f} {py(h[i]):.1f}V{py(l[i]):.1f}"
+            f"M{xs[i]-tick:.1f} {py(o[i]):.1f}H{xs[i]:.1f}"
+            f"M{xs[i]:.1f} {py(c[i]):.1f}H{xs[i]+tick:.1f}'/>"
+        )
 
     last_close = c[-1]
-    lc_y = py[-1]
+    lc_y = py(last_close)
 
     piv_line = ""
     pvy = None
-    if pivot and lo <= pivot <= hi:
-        pvy = PADT + price_h * (1 - (pivot - lo) / rng)
+    if pivot and lo_p <= pivot <= hi_p:
+        pvy = py(pivot)
         piv_line = (
             f"<line class='pivot' x1='{PADL}' y1='{pvy:.1f}' x2='{W-PADR}' y2='{pvy:.1f}'/>"
             f"<text class='pivlab' x='{W-PADR+3}' y='{pvy+3:.1f}'>pivot {pivot:.2f}</text>"
@@ -245,11 +273,10 @@ def spark_svg(d, c, v, pivot, hot_thresh, tf):
         anchor = "start" if i == 0 else ("end" if i == n - 1 else "middle")
         ticks.append(f"<text class='xt' x='{xs[i]:.1f}' y='{H-2}' text-anchor='{anchor}'>{lbl}</text>")
 
-    return f"""<svg viewBox="0 0 {W} {H}" class="spark" preserveAspectRatio="none" role="img" aria-label="price and volume, last {n} {unit}">
-  <g class="vols">{''.join(bars)}</g>
+    return f"""<svg viewBox="0 0 {W} {H}" class="spark" preserveAspectRatio="none" role="img" aria-label="OHLC price and volume, last {n} {unit}">
+  <g class="vols">{''.join(vbars)}</g>
   {piv_line}
-  <path class="pl" d="{line}"/>
-  <circle class="pe" cx="{endx:.1f}" cy="{endy:.1f}" r="3.2"/>
+  <g class="obars">{''.join(pbars)}</g>
   {price_lab}
   {''.join(ticks)}
 </svg>"""
@@ -263,10 +290,10 @@ def card(r):
     piv_cls = "at" if piv is not None and piv >= -2 else ("near" if piv is not None and piv >= -5 else "far")
     pats = "  ·  ".join(sorted(r["patterns"]))
     cht = r["chart"]
-    wk = cht.get("w") or {"d": [], "c": [], "v": []}
+    wk = cht.get("w") or {}
     ba = vs["base_avg"]
-    weekly_svg = spark_svg(wk["d"], wk["c"], wk["v"], r.get("pivot_high"), 1.5 * 5 * ba, "weekly")
-    daily_svg  = spark_svg(cht["d"], cht["c"], cht["v"], r.get("pivot_high"), 1.5 * ba, "daily")
+    weekly_svg = spark_svg(wk,  r.get("pivot_high"), 1.5 * 5 * ba, "weekly")
+    daily_svg  = spark_svg(cht, r.get("pivot_high"), 1.5 * ba, "daily")
     wr = vs["week_ratios"]
     weeks_txt = f"{vs['weeks']}+" if vs["weeks"] >= MAX_WEEKS else f"{vs['weeks']}"
     rows = [
@@ -565,8 +592,9 @@ h2 .count {{
 .sparklbl {{ font-family:"IBM Plex Mono",monospace; font-size:9.5px; color:var(--ink-3);
   text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }}
 svg.spark {{ width:100%; height:225px; display:block; overflow:visible; }}
-svg.spark .pl {{ fill:none; stroke:var(--ink); stroke-width:2; stroke-linejoin:round; stroke-linecap:round; }}
-svg.spark .pe {{ fill:var(--accent); stroke:var(--panel); stroke-width:1.5; }}
+svg.spark .ob {{ fill:none; stroke-width:1.3; stroke-linecap:butt; shape-rendering:crispEdges; }}
+svg.spark .ob.up {{ stroke:var(--up); }}
+svg.spark .ob.dn {{ stroke:var(--down); }}
 svg.spark .vb {{ fill:var(--vol); }}
 svg.spark .vb.hot {{ fill:var(--vol-hot); }}
 svg.spark .pivot {{ stroke:var(--pivot); stroke-width:1; stroke-dasharray:3 3; opacity:.8; }}
@@ -604,7 +632,8 @@ footer code {{ font-family:"IBM Plex Mono",monospace; background:var(--panel-2);
   VCP + Vol Surge, Follow-Through Day), de-duplicated. Volume math is computed here from daily bars:
   weeks are 5-session blocks; a week is "elevated" when its average volume &#8805; 1.5&#215; the ~10-week baseline
   (the baseline sits before the lookback window); <code>last-day pop</code> = last session / prior 20.
-  Charts show ~52 weeks (left) and ~70 sessions (right); blue bars mark weeks/days &#8805; 1.5&#215; that baseline; dashed line is the pivot.
+  Charts show ~52 weeks (left) and ~70 sessions (right) as OHLC bars &#8212; green when the close &#8805; the open, red otherwise;
+  blue volume bars mark weeks/days &#8805; 1.5&#215; that baseline; dashed line is the pivot.
   Educational only &#8212; not financial advice.
 </footer>
 </div>
