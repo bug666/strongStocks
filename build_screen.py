@@ -230,9 +230,10 @@ def spark_svg(bars, pivot, hot_thresh, tf):
     iw = W - PADL - PADR
     xs = [PADL + iw * i / (n - 1) for i in range(n)]
     py = lambda val: PADT + price_h * (1 - (val - lo_p) / rng)
-    # clip the volume scale to the ~92nd percentile so one blow-off day doesn't flatten the rest
+    # scale volume to the 98th percentile: a lone blow-off print still clips, but
+    # the recent surge bars (the whole point of this screen) keep true proportion
     sv = sorted(v)
-    vmax = sv[max(0, min(len(sv) - 1, int(len(sv) * 0.92)))] or (max(v) or 1)
+    vmax = sv[max(0, min(len(sv) - 1, int(len(sv) * 0.98)))] or (max(v) or 1)
     bw = max(1.5, iw / n * 0.62)
     tick = max(1.0, bw * 0.45)
 
