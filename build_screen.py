@@ -6,8 +6,8 @@ Pulls Hawkeye's JSON API for a set of volume/breakout patterns, then keeps names
   - price > $20
   - AT LEAST 2 consecutive recent weeks of above-average volume
     (each week's avg volume >= 1.5x the ~10-week baseline; the streak may be 2, 3, 4+ weeks)
-  - a fresh last-day volume pop (last session >= 1.3x the prior 20-session average)
-Ranks by the length of the elevated-volume streak, then the last-day pop, then proximity to the pivot.
+Ranks by the length of the elevated-volume streak, then the most recent week's
+volume ratio, then proximity to the pivot.
 
 Writes one page per scan date plus a rolling "index.html" (latest scan + a link list of every past day).
 
@@ -23,10 +23,8 @@ MIN_PRICE     = 20.0
 WEEK_RATIO    = 1.5    # a week counts as "elevated" when its avg volume >= this * baseline
 MIN_WEEKS     = 2      # require a streak of at least this many consecutive elevated weeks
 MAX_WEEKS     = 8      # how many recent weeks to look back over
-DAY_POP_MIN   = 1.3    # last session vs prior 20-session average
-NEAR_MISS_DAY = 1.10
 NOISE_WK      = 6.0    # 2-week volume this far above baseline = split / new listing / buyout, not accumulation
-NOISE_DAY     = 10.0
+NOISE_DAY     = 10.0   # last-day volume this far above the 20-day average = same kind of anomaly
 
 
 def fetch(pat, raw_cache=None):
@@ -133,15 +131,11 @@ def collect(raw_cache=None):
 
 
 def tier(r):
-    vs = r["vs"]
-    weeks, day = vs["weeks"], vs["day_pop"] or 0
-    if weeks >= MIN_WEEKS and day >= DAY_POP_MIN:
+    weeks = r["vs"]["weeks"]
+    if weeks >= MIN_WEEKS:
         return 1
-    # one leg soft: the volume streak is there but today's pop is muted,
-    # or today popped but the streak is only one week
-    if weeks >= MIN_WEEKS and day >= NEAR_MISS_DAY:
-        return 2
-    if weeks == MIN_WEEKS - 1 and day >= DAY_POP_MIN:
+    # streak not yet confirmed: only a single elevated week so far
+    if weeks == MIN_WEEKS - 1:
         return 2
     return 0
 
@@ -149,7 +143,7 @@ def tier(r):
 def rank_key(r):
     vs = r["vs"]
     piv = r["pct_from_pivot"] if r["pct_from_pivot"] is not None else -99
-    return (-vs["weeks"], -(vs["day_pop"] or 0), -piv)
+    return (-vs["weeks"], -vs["week_ratios"][0], -piv)
 
 
 # ---------- rendering ----------
@@ -242,7 +236,7 @@ def card(r):
     weeks_txt = f"{vs['weeks']}+" if vs["weeks"] >= MAX_WEEKS else f"{vs['weeks']}"
     rows = [
         ("weeks ≥ 1.5×", weeks_txt, "hot" if vs["weeks"] >= MIN_WEEKS else ""),
-        ("last-day pop", f"{(vs['day_pop'] or 0):.2f}×", "hot" if (vs["day_pop"] or 0) >= DAY_POP_MIN else ""),
+        ("last-day pop", f"{(vs['day_pop'] or 0):.2f}×", ""),
         ("this week", f"{wr[0]:.2f}×", "hot" if wr[0] >= WEEK_RATIO else ""),
         ("1 wk ago", f"{wr[1]:.2f}×", "hot" if wr[1] >= WEEK_RATIO else ""),
         ("2 wks ago", f"{wr[2]:.2f}×", "hot" if wr[2] >= WEEK_RATIO else ""),
@@ -363,13 +357,12 @@ def render(rows, meta, archive, scan_date, is_index):
         )
 
     body = (
-        section("Both volume legs firing",
-                f"At least {MIN_WEEKS} consecutive weeks with volume &#8805; {WEEK_RATIO:g}&#215; the ~10-week baseline "
-                f"<em>and</em> a last-day pop &#8805; {DAY_POP_MIN:g}&#215; the 20-day average.",
+        section("Multi-week volume surge",
+                f"At least {MIN_WEEKS} consecutive weeks with average volume &#8805; {WEEK_RATIO:g}&#215; "
+                f"the ~10-week baseline.",
                 t1)
-        + section("Watch — one leg soft",
-                  "The multi-week volume streak is there but today's pop is muted, or today popped "
-                  f"while the streak is still {MIN_WEEKS - 1} week.",
+        + section("Watch — streak not confirmed",
+                  f"Only {MIN_WEEKS - 1} elevated week so far; needs another to clear the bar.",
                   t2)
     )
 
@@ -398,7 +391,7 @@ def render(rows, meta, archive, scan_date, is_index):
 
 
 TEMPLATE = """<title>{title}</title>
-<meta name="description" content="Daily Hawkeye screen: >$20 stocks with two or more weeks of above-average volume and a fresh last-day pop near their pivot.">
+<meta name="description" content="Daily Hawkeye screen: >$20 stocks with two or more consecutive weeks of above-average volume near their breakout pivot.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
 :root {{
@@ -551,8 +544,8 @@ footer code {{ font-family:"IBM Plex Mono",monospace; background:var(--panel-2);
 <header>
   <p class="kind">{kind}</p>
   <h1>Volume Pivot Screen</h1>
-  <p class="lede">Stocks over $20 with at least two consecutive weeks of above-average volume and a fresh
-  last-day volume pop, sitting near their breakout pivot. Rebuilt each weekday around noon Central from Hawkeye's scan.</p>
+  <p class="lede">Stocks over $20 with at least two consecutive weeks of above-average volume,
+  sitting near their breakout pivot. Rebuilt each weekday around noon Central from Hawkeye's scan.</p>
   <div class="meta">
     <span><b>scan data:</b> {data_date}</span>
     <span><b>hawkeye ran:</b> {scan_updated}</span>
