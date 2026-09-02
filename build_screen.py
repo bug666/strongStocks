@@ -76,6 +76,32 @@ def vol_stats(v):
     }
 
 
+def to_weekly(d, c, v, weeks=52):
+    """Aggregate daily bars into fixed 5-session weekly buckets.
+
+    Blocks are counted back from the most recent bar (same week definition as
+    vol_stats). Week label = the block's last session date, weekly close = its
+    last close, weekly volume = the block sum. Returns the last `weeks` buckets
+    oldest -> newest.
+    """
+    d = d or []
+    c = c or []
+    v = v or []
+    n = min(len(d), len(c), len(v))
+    if n < 10:
+        return {"d": [], "c": [], "v": []}
+    d, c, v = d[-n:], c[-n:], v[-n:]
+    wd, wc, wv = [], [], []
+    i = n
+    while i > 0 and len(wd) < weeks:
+        lo = max(0, i - 5)
+        wd.append(d[i - 1])
+        wc.append(c[i - 1])
+        wv.append(sum(x for x in v[lo:i] if isinstance(x, (int, float))))
+        i = lo
+    return {"d": wd[::-1], "c": wc[::-1], "v": wv[::-1]}
+
+
 def collect(raw_cache=None):
     by_ticker = {}
     meta = {"noise_excluded": set(), "errs": []}
@@ -123,6 +149,7 @@ def collect(raw_cache=None):
                         "d": (o.get("d") or [])[n - k:],
                         "c": (o.get("c") or [])[n - k:],
                         "v": (o.get("v") or [])[n - k:],
+                        "w": to_weekly(o.get("d"), o.get("c"), o.get("v")),
                     },
                 }
                 by_ticker[t] = rec
@@ -154,14 +181,18 @@ def fnum(x, d=2):
     return f"{x:,.{d}f}"
 
 
-def spark_svg(chart, pivot, base_avg, uid):
-    d, c, v = chart["d"], chart["c"], chart["v"]
-    c = [x for x in c if isinstance(x, (int, float))]
-    v = [x for x in v if isinstance(x, (int, float))]
+def spark_svg(d, c, v, pivot, hot_thresh, tf):
+    """One price-line + volume-bar chart. tf is 'daily' or 'weekly' (only sets
+    the aria-label unit); hot_thresh is the absolute volume level at or above
+    which a bar is drawn 'hot'."""
+    d = list(d or [])
+    c = [x for x in (c or []) if isinstance(x, (int, float))]
+    v = [x for x in (v or []) if isinstance(x, (int, float))]
     n = min(len(d), len(c), len(v))
     if n < 10:
         return "<div class='nochart'>no chart data</div>"
     d, c, v = d[-n:], c[-n:], v[-n:]
+    unit = "weeks" if tf == "weekly" else "sessions"
     W, H = 620, 200
     PADL, PADR, PADT = 6, 44, 8
     VOL_H, GAP = 58, 14
@@ -183,7 +214,7 @@ def spark_svg(chart, pivot, base_avg, uid):
     for i in range(n):
         bh = min(VOL_H, VOL_H * (v[i] / vmax))
         y = PADT + price_h + GAP + (VOL_H - bh)
-        hot = base_avg and v[i] >= 1.5 * base_avg
+        hot = hot_thresh and v[i] >= hot_thresh
         cls = "vb hot" if hot else "vb"
         bars.append(f"<rect class='{cls}' x='{xs[i]-bw/2:.1f}' y='{y:.1f}' width='{bw:.1f}' height='{max(bh,0.6):.1f}' rx='1'/>")
 
@@ -214,7 +245,7 @@ def spark_svg(chart, pivot, base_avg, uid):
         anchor = "start" if i == 0 else ("end" if i == n - 1 else "middle")
         ticks.append(f"<text class='xt' x='{xs[i]:.1f}' y='{H-2}' text-anchor='{anchor}'>{lbl}</text>")
 
-    return f"""<svg viewBox="0 0 {W} {H}" class="spark" preserveAspectRatio="none" role="img" aria-label="price and volume, last {n} sessions">
+    return f"""<svg viewBox="0 0 {W} {H}" class="spark" preserveAspectRatio="none" role="img" aria-label="price and volume, last {n} {unit}">
   <g class="vols">{''.join(bars)}</g>
   {piv_line}
   <path class="pl" d="{line}"/>
@@ -231,7 +262,11 @@ def card(r):
     piv = r["pct_from_pivot"]
     piv_cls = "at" if piv is not None and piv >= -2 else ("near" if piv is not None and piv >= -5 else "far")
     pats = "  ·  ".join(sorted(r["patterns"]))
-    chart = spark_svg(r["chart"], r.get("pivot_high"), vs["base_avg"], r["ticker"])
+    cht = r["chart"]
+    wk = cht.get("w") or {"d": [], "c": [], "v": []}
+    ba = vs["base_avg"]
+    weekly_svg = spark_svg(wk["d"], wk["c"], wk["v"], r.get("pivot_high"), 1.5 * 5 * ba, "weekly")
+    daily_svg  = spark_svg(cht["d"], cht["c"], cht["v"], r.get("pivot_high"), 1.5 * ba, "daily")
     wr = vs["week_ratios"]
     weeks_txt = f"{vs['weeks']}+" if vs["weeks"] >= MAX_WEEKS else f"{vs['weeks']}"
     rows = [
@@ -260,7 +295,10 @@ def card(r):
     <div class="metrics">{metric_html}</div>
     <div class="pats">{html.escape(pats)}</div>
   </div>
-  <div class="chartwrap">{chart}</div>
+  <div class="chartwrap">
+    <div class="sparkcol"><div class="sparklbl">weekly &middot; ~1yr</div>{weekly_svg}</div>
+    <div class="sparkcol"><div class="sparklbl">daily &middot; ~70 sessions</div>{daily_svg}</div>
+  </div>
 </article>"""
 
 
@@ -522,8 +560,11 @@ h2 .count {{
 .mv.near {{ color:var(--accent); }}
 .mv.far {{ color:var(--ink-2); }}
 .pats {{ margin-top:12px; font-size:10.5px; color:var(--ink-3); line-height:1.45; }}
-.chartwrap {{ padding:14px 16px; min-width:0; display:flex; align-items:center; }}
-svg.spark {{ width:100%; height:200px; display:block; overflow:visible; }}
+.chartwrap {{ padding:14px 16px; min-width:0; display:flex; align-items:center; gap:16px; }}
+.sparkcol {{ flex:1; min-width:0; }}
+.sparklbl {{ font-family:"IBM Plex Mono",monospace; font-size:9.5px; color:var(--ink-3);
+  text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }}
+svg.spark {{ width:100%; height:225px; display:block; overflow:visible; }}
 svg.spark .pl {{ fill:none; stroke:var(--ink); stroke-width:2; stroke-linejoin:round; stroke-linecap:round; }}
 svg.spark .pe {{ fill:var(--accent); stroke:var(--panel); stroke-width:1.5; }}
 svg.spark .vb {{ fill:var(--vol); }}
@@ -537,6 +578,7 @@ footer code {{ font-family:"IBM Plex Mono",monospace; background:var(--panel-2);
 @media (max-width:720px) {{
   .card {{ grid-template-columns:1fr; }}
   .readout {{ border-right:none; border-bottom:1px solid var(--hair); }}
+  .chartwrap {{ flex-direction:column; align-items:stretch; }}
 }}
 </style>
 
@@ -562,7 +604,7 @@ footer code {{ font-family:"IBM Plex Mono",monospace; background:var(--panel-2);
   VCP + Vol Surge, Follow-Through Day), de-duplicated. Volume math is computed here from daily bars:
   weeks are 5-session blocks; a week is "elevated" when its average volume &#8805; 1.5&#215; the ~10-week baseline
   (the baseline sits before the lookback window); <code>last-day pop</code> = last session / prior 20.
-  Chart shows ~70 sessions; blue bars mark days &#8805; 1.5&#215; that baseline; dashed line is the pivot.
+  Charts show ~52 weeks (left) and ~70 sessions (right); blue bars mark weeks/days &#8805; 1.5&#215; that baseline; dashed line is the pivot.
   Educational only &#8212; not financial advice.
 </footer>
 </div>
